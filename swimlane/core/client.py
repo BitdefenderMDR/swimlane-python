@@ -100,7 +100,9 @@ class Swimlane(object):
             write_to_read_only: bool=False,
             retry: bool=True,
             max_retries: int=5,
-            retry_interval: int=5
+            retry_interval: int=5,
+            cloudflare_client_id: str="",
+            cloudflare_client_secret: str=""
     ):
         self.__verify_auth_params(username, password, access_token)
 
@@ -119,7 +121,7 @@ class Swimlane(object):
 
         self._session = WrappedSession()
         self._session.verify = verify_ssl
-        
+
         self.retry = retry
         self.max_retries = max_retries
         self.retry_interval = retry_interval
@@ -133,7 +135,9 @@ class Swimlane(object):
         else:
             self._session.auth = SwimlaneTokenAuth(
                 self,
-                access_token
+                access_token,
+                cloudflare_client_id,
+                cloudflare_client_secret
             )
 
         self.apps = AppAdapter(self)
@@ -227,22 +231,22 @@ class Swimlane(object):
             kwargs['headers'] = headers
 
             kwargs['data'] = json.dumps(json_data, sort_keys=True, separators=(',', ':'))
-        
+
         # Retry logic
         req_retry = kwargs.pop('retry', self.retry)
-        
+
         req_max_retries = kwargs.pop('max_retries', self.max_retries)
         if not isinstance(req_max_retries, int):
             raise TypeError('max_retries should be an integer')
         if req_max_retries <= 0:
             raise ValueError('max_retries should be a positive integer')
-        
+
         req_retry_interval = kwargs.pop('retry_interval', self.retry_interval)
         if not isinstance(req_retry_interval, int):
             raise TypeError('retry_interval should be an integer')
         if req_retry_interval <= 0:
             raise ValueError('retry_interval should be a positive integer')
-        
+
         while not req_max_retries<0:
             response = self._session.request(method, urljoin(str(self.host) + self._api_root, api_endpoint), **kwargs)
 
@@ -250,7 +254,7 @@ class Swimlane(object):
             try:
                 response.raise_for_status()
                 # Exit loop on successful request
-                req_max_retries = -1 
+                req_max_retries = -1
             except requests.HTTPError as error:
                 if error.response.status_code == 400:
                     raise SwimlaneHTTP400Error(error)
@@ -324,17 +328,21 @@ class SwimlaneTokenAuth(SwimlaneResolver):
     .. versionadded:: 4.1.0
     """
 
-    def __init__(self, swimlane, access_token):
+    def __init__(self, swimlane, access_token, cf_client_id, cf_client_secret):
         super(SwimlaneTokenAuth, self).__init__(swimlane)
 
         self._access_token = access_token
         self.user = None
-    
+        self._cf_client_id = cf_client_id
+        self._cf_client_secret = cf_client_secret
+
     def __call__(self, request):
         """Attach necessary headers to all requests"""
 
         headers = {
-            'Private-Token': self._access_token
+            'Private-Token': self._access_token,
+            'CF-Access-Client-Id': self._cf_client_id,
+            'CF-Access-Client-Secret': self._cf_client_secret
         }
 
         request.headers.update(headers)
@@ -352,10 +360,9 @@ class SwimlaneTokenAuth(SwimlaneResolver):
             headers=headers
         )
         self._swimlane._session.auth = self
-        
         json_content = resp.json()
         self.user = User(self._swimlane, _user_raw_from_login_content(json_content))
-        
+
         return request
 
 
